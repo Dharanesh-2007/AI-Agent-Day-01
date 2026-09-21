@@ -1,0 +1,105 @@
+"""System 3: an AI agent. Groq + tools + loop."""
+
+import json
+import os
+
+from groq import Groq
+from config import MODEL, QUESTIONS, banner
+from tools import TOOLS, TOOL_FUNCTIONS
+
+
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+
+SYSTEM_PROMPT = (
+    "You are a college fee assistant. "
+    "Never guess a fee: always use get_course_fee. "
+    "Use calculator for any arithmetic. "
+    "Available course codes: CS101, AI202, DS303. "
+    "If no tool is needed, answer directly."
+)
+
+
+def agent(question, max_steps=6, verbose=True):
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+        },
+        {
+            "role": "user",
+            "content": question
+        }
+    ]
+
+    for step in range(1, max_steps + 1):
+
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=TOOLS,
+            temperature=0
+        )
+
+        message = response.choices[0].message
+
+        # No tool needed → final answer
+        if not message.tool_calls:
+            return message.content.strip()
+
+        # Add assistant tool-call message
+        messages.append({
+            "role": "assistant",
+            "content": message.content or "",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments
+                    }
+                }
+                for call in message.tool_calls
+            ]
+        })
+
+        # Execute tools
+        for call in message.tool_calls:
+
+            name = call.function.name
+            arguments = json.loads(call.function.arguments or "{}")
+
+            function = TOOL_FUNCTIONS.get(name)
+
+            if function:
+                result = function(**arguments)
+            else:
+                result = f"Unknown tool: {name}"
+
+            if verbose:
+                print(
+                    f"   step {step}: "
+                    f"{name}({arguments}) -> {result}"
+                )
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": result
+            })
+
+    return "Stopped: maximum steps reached without a final answer."
+
+
+if __name__ == "__main__":
+
+    banner("SYSTEM 3: AI AGENT")
+
+    for question in QUESTIONS:
+
+        print("Q:", question)
+
+        print("A:", agent(question))
+
+        print("-" * 70)
